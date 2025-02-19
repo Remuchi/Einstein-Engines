@@ -1,8 +1,6 @@
 using System.Linq;
-using System.Numerics;
 using System.Text;
 using Content.Client.Guidebook;
-using Content.Client.Paint;
 using Content.Client.Players.PlayTimeTracking;
 using Content.Client.Stylesheets;
 using Content.Client.UserInterface.Systems.Guidebook;
@@ -22,41 +20,26 @@ using Robust.Client.UserInterface.XAML;
 using Robust.Shared.Configuration;
 using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
-using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
-namespace Content.Client.Lobby.UI;
-
+namespace Content.Client.Lobby.UI.Loadouts;
 
 [GenerateTypedNameReferences]
 public sealed partial class LoadoutPreferenceSelector : Control
 {
-    public const string DefaultLoadoutInfoGuidebook = "LoadoutInfo";
-
-    public EntityUid DummyEntityUid;
-    private readonly IEntityManager _entityManager;
+    public event Action<LoadoutPreference>? PreferenceChanged;
 
     public LoadoutPrototype Loadout { get; }
-
-    private LoadoutPreference _preference = null!;
-    public LoadoutPreference Preference
-    {
-        get => _preference;
-        set
-        {
-            _preference = value;
-            NameEdit.Text = value.CustomName ?? "";
-            DescriptionEdit.TextRope = new Rope.Leaf(value.CustomDescription ?? "");
-            ColorEdit.Color = Color.FromHex(value.CustomColorTint, Color.White);
-            if (value.CustomColorTint != null)
-                UpdatePaint(new(DummyEntityUid, _entityManager.GetComponent<PaintedComponent>(DummyEntityUid)), _entityManager);
-            HeirloomButton.Pressed = value.CustomHeirloom ?? false;
-            PreferenceButton.Pressed = value.Selected;
-        }
-    }
-
     public bool Valid;
+
+    private readonly IEntityManager _entityManager;
+    private readonly EntityUid _previewItemUid;
+
     private bool _showUnusable;
+    private bool _wearable;
+    private LoadoutPreference _preference = null!;
+    private LoadoutCustomizePanel? _customizePanel;
+
     public bool ShowUnusable
     {
         get => _showUnusable;
@@ -69,7 +52,6 @@ public sealed partial class LoadoutPreferenceSelector : Control
         }
     }
 
-    private bool _wearable;
     public bool Wearable
     {
         get => _wearable;
@@ -82,13 +64,37 @@ public sealed partial class LoadoutPreferenceSelector : Control
         }
     }
 
-    public event Action<LoadoutPreference>? PreferenceChanged;
+    public LoadoutPreference Preference
+    {
+        get => _preference;
+        set
+        {
+            _preference = value;
+            if (value.CustomColorTint != null)
+                UpdatePaint(
+                    new(_previewItemUid, _entityManager.GetComponent<PaintedComponent>(_previewItemUid)), _entityManager);
+            HeirloomButton.Pressed = value.CustomHeirloom ?? false;
+            PreferenceButton.Pressed = value.Selected;
+        }
+    }
 
-
-    public LoadoutPreferenceSelector(LoadoutPrototype loadout, JobPrototype highJob,
+    public LoadoutPreferenceSelector(
+        LoadoutPrototype loadout, JobPrototype highJob,
         HumanoidCharacterProfile profile, ref Dictionary<string, EntityUid> entities,
         IEntityManager entityManager, IPrototypeManager prototypeManager, IConfigurationManager configManager,
-        CharacterRequirementsSystem characterRequirementsSystem, JobRequirementsManager jobRequirementsManager)
+        CharacterRequirementsSystem characterRequirementsSystem, JobRequirementsManager jobRequirementsManager,
+        LoadoutPreference preference
+    ) : this(
+        loadout, highJob, profile, ref entities, entityManager, prototypeManager, configManager,
+        characterRequirementsSystem, jobRequirementsManager) =>
+        Preference = preference;
+
+    public LoadoutPreferenceSelector(
+        LoadoutPrototype loadout, JobPrototype highJob,
+        HumanoidCharacterProfile profile, ref Dictionary<string, EntityUid> entities,
+        IEntityManager entityManager, IPrototypeManager prototypeManager, IConfigurationManager configManager,
+        CharacterRequirementsSystem characterRequirementsSystem, JobRequirementsManager jobRequirementsManager
+    )
     {
         RobustXamlLoader.Load(this);
 
@@ -97,11 +103,6 @@ public sealed partial class LoadoutPreferenceSelector : Control
 
         // Show/hide the special menu and items depending on what's allowed
         HeirloomButton.Visible = loadout.CanBeHeirloom;
-        SpecialMenu.Visible = Loadout.CustomName || Loadout.CustomDescription || Loadout.CustomColorTint;
-        SpecialName.Visible = Loadout.CustomName;
-        SpecialDescription.Visible = Loadout.CustomDescription;
-        SpecialColorTintToggle.Visible = Loadout.CustomColorTint;
-
 
         SpriteView previewLoadout;
         if (!entities.TryGetValue(loadout.ID + 0, out var dummyLoadoutItem))
@@ -111,28 +112,29 @@ public sealed partial class LoadoutPreferenceSelector : Control
             entities.Add(loadout.ID + 0, dummyLoadoutItem);
 
             // Create a sprite preview of the loadout item
-            previewLoadout = new SpriteView
+            previewLoadout = new()
             {
-                Scale = new Vector2(1, 1),
+                Scale = new(1, 1),
                 OverrideDirection = Direction.South,
                 VerticalAlignment = VAlignment.Center,
-                SizeFlagsStretchRatio = 1,
+                SizeFlagsStretchRatio = 1
             };
             previewLoadout.SetEntity(dummyLoadoutItem);
         }
         else
         {
             // Create a sprite preview of the loadout item
-            previewLoadout = new SpriteView
+            previewLoadout = new()
             {
-                Scale = new Vector2(1, 1),
+                Scale = new(1, 1),
                 OverrideDirection = Direction.South,
                 VerticalAlignment = VAlignment.Center,
-                SizeFlagsStretchRatio = 1,
+                SizeFlagsStretchRatio = 1
             };
             previewLoadout.SetEntity(dummyLoadoutItem);
         }
-        DummyEntityUid = dummyLoadoutItem;
+
+        _previewItemUid = dummyLoadoutItem;
 
         entityManager.EnsureComponent<AppearanceComponent>(dummyLoadoutItem);
         entityManager.EnsureComponent<PaintedComponent>(dummyLoadoutItem, out var paint);
@@ -150,15 +152,10 @@ public sealed partial class LoadoutPreferenceSelector : Control
                 loadoutName += $" ({Loc.GetString(itemLabel)})";
         }
 
-        var loadoutDesc =
-            !Loc.TryGetString($"loadout-description-{loadout.ID}", out var description)
-                ? entityManager.GetComponent<MetaDataComponent>(dummyLoadoutItem).EntityDescription
-                : description;
+        var loadoutDesc = !Loc.TryGetString($"loadout-description-{loadout.ID}", out var description)
+            ? entityManager.GetComponent<MetaDataComponent>(dummyLoadoutItem).EntityDescription
+            : description;
 
-
-        // Manage the info button
-        void UpdateGuidebook() => GuidebookButton.Visible =
-            prototypeManager.HasIndex<GuideEntryPrototype>(loadout.GuideEntry);
         UpdateGuidebook();
         prototypeManager.PrototypesReloaded += _ => UpdateGuidebook();
 
@@ -170,40 +167,37 @@ public sealed partial class LoadoutPreferenceSelector : Control
             var guidebookController = UserInterfaceManager.GetUIController<GuidebookUIController>();
             //TODO: Don't close the guidebook if its already open, just go to the correct page
             guidebookController.ToggleGuidebook(
-                new Dictionary<string, GuideEntry> { { loadout.GuideEntry, guideRoot } },
-                includeChildren: true,
+                new Dictionary<string, GuideEntry> { { loadout.GuideEntry, guideRoot } }, includeChildren: true,
                 selected: loadout.GuideEntry);
         };
 
         // Create a checkbox to get the loadout
-        PreferenceButton.AddChild(new BoxContainer
-        {
-            Children =
+        PreferenceButton.AddChild(
+            new BoxContainer
             {
-                new Label
+                Children =
                 {
-                    Text = loadout.Cost.ToString(),
-                    StyleClasses = { StyleBase.StyleClassLabelHeading },
-                    MinWidth = 32,
-                    MaxWidth = 32,
-                    ClipText = true,
-                    Margin = new Thickness(0, 0, 8, 0),
-                },
-                new PanelContainer
-                {
-                    PanelOverride = new StyleBoxFlat { BackgroundColor = Color.FromHex("#2f2f2f") },
-                    Children =
+                    new Label
                     {
-                        previewLoadout,
+                        Text = loadout.Cost.ToString(),
+                        StyleClasses = { StyleBase.StyleClassLabelHeading },
+                        MinWidth = 32,
+                        MaxWidth = 32,
+                        ClipText = true,
+                        Margin = new(0, 0, 8, 0)
                     },
-                },
-                new Label
-                {
-                    Text = loadoutName,
-                    Margin = new Thickness(8, 0, 0, 0),
-                },
-            },
-        });
+                    new PanelContainer
+                    {
+                        PanelOverride = new StyleBoxFlat { BackgroundColor = Color.FromHex("#2f2f2f") },
+                        Children = { previewLoadout }
+                    },
+                    new Label
+                    {
+                        Text = loadoutName,
+                        Margin = new(8, 0, 0, 0)
+                    }
+                }
+            });
         PreferenceButton.OnToggled += args =>
         {
             _preference.Selected = args.Pressed;
@@ -214,29 +208,19 @@ public sealed partial class LoadoutPreferenceSelector : Control
             _preference.CustomHeirloom = args.Pressed ? true : null;
             PreferenceChanged?.Invoke(Preference);
         };
-        SaveButton.OnPressed += _ =>
+        CustomizeButton.OnPressed += _ =>
         {
-            _preference.CustomColorTint = SpecialColorTintToggle.Pressed ? ColorEdit.Color.ToHex() : null;
-            _preference.Selected = PreferenceButton.Pressed;
-            PreferenceChanged?.Invoke(Preference);
+            if (_customizePanel is null)
+            {
+                CreateCustomizePanel(loadoutName, loadoutDesc, (dummyLoadoutItem, paint));
+            }
+            else
+            {
+                _customizePanel.SaveAll();
+                Container.RemoveChild(_customizePanel);
+                _customizePanel = null;
+            }
         };
-
-        // Update prefs cache when something changes
-        NameEdit.OnTextChanged += _ =>
-            _preference.CustomName = string.IsNullOrEmpty(NameEdit.Text) ? null : NameEdit.Text;
-        DescriptionEdit.OnTextChanged += _ =>
-            _preference.CustomDescription = string.IsNullOrEmpty(Rope.Collapse(DescriptionEdit.TextRope)) ? null : Rope.Collapse(DescriptionEdit.TextRope);
-        SpecialColorTintToggle.OnToggled += args =>
-            ColorEdit.Visible = args.Pressed;
-        ColorEdit.OnColorChanged += _ =>
-        {
-            _preference.CustomColorTint = SpecialColorTintToggle.Pressed ? ColorEdit.Color.ToHex() : null;
-            UpdatePaint(new Entity<PaintedComponent>(dummyLoadoutItem, paint), entityManager);
-        };
-
-        NameEdit.PlaceHolder = loadoutName;
-        DescriptionEdit.Placeholder = new Rope.Leaf(Loc.GetString(loadoutDesc));
-
 
         var tooltip = new StringBuilder();
         // Add the loadout description to the tooltip if there is one
@@ -245,7 +229,7 @@ public sealed partial class LoadoutPreferenceSelector : Control
 
         // Get requirement reasons
         characterRequirementsSystem.CheckRequirementsValid(
-            loadout.Requirements, highJob, profile, new Dictionary<string, TimeSpan>(),
+            loadout.Requirements, highJob, profile, new(),
             jobRequirementsManager.IsWhitelisted(), loadout,
             entityManager, prototypeManager, configManager,
             out var reasons);
@@ -261,28 +245,36 @@ public sealed partial class LoadoutPreferenceSelector : Control
             formattedTooltip.SetMessage(FormattedMessage.FromMarkupPermissive(tooltip.ToString()));
             PreferenceButton.TooltipSupplier = _ => formattedTooltip;
         }
+
+        return;
+
+        // Manage the info button
+        void UpdateGuidebook() =>
+            GuidebookButton.Visible = prototypeManager.HasIndex<GuideEntryPrototype>(loadout.GuideEntry);
     }
 
-    private bool _initialized;
-    protected override void FrameUpdate(FrameEventArgs args)
+    private void CreateCustomizePanel(string loadoutName, string loadoutDesc, Entity<PaintedComponent> loadoutItem)
     {
-        if (_initialized || SpecialMenu.Heading == null)
-            return;
+        var panel = new LoadoutCustomizePanel(loadoutName, loadoutDesc, _preference, Loadout);
+        panel.OnSaved += args =>
+        {
+            _preference.CustomName = args.CustomName;
+            _preference.CustomDescription = args.CustomDescription;
+            _preference.CustomColorTint = args.CustomColor;
+            _preference.Selected = PreferenceButton.Pressed;
+            UpdatePaint(loadoutItem, _entityManager);
+            PreferenceChanged?.Invoke(Preference);
+        };
 
-        // Move the special editor
-        var heading = SpecialMenu.Heading;
-        heading.Orphan();
-        ButtonGroup.AddChild(heading);
-        GuidebookButton.Orphan();
-        ButtonGroup.AddChild(GuidebookButton);
+        panel.OnColorChanged += args =>
+        {
+            _preference.CustomColorTint = args.Color;
+            UpdatePaint(loadoutItem, _entityManager);
+        };
 
-        // These guys are here too for reasons
-        HeadingButton.SetHeight = HeirloomButton.SetHeight = GuidebookButton.SetHeight = PreferenceButton.Size.Y;
-        SpecialColorTintToggle.Pressed = ColorEdit.Visible = _preference.CustomColorTint != null;
-
-        _initialized = true;
+        _customizePanel = panel;
+        Container.AddChild(panel);
     }
-
 
     private void UpdatePaint(Entity<PaintedComponent> entity, IEntityManager entityManager)
     {
@@ -292,7 +284,9 @@ public sealed partial class LoadoutPreferenceSelector : Control
             entity.Comp.Enabled = true;
         }
         else
+        {
             entity.Comp.Enabled = false;
+        }
 
         var app = entityManager.System<SharedAppearanceSystem>();
         app.TryGetData(entity, PaintVisuals.Painted, out bool value);

@@ -55,7 +55,8 @@ public sealed class SharedLoadoutSystem : EntitySystem
         HumanoidCharacterProfile profile,
         Dictionary<string, TimeSpan> playTimes,
         bool whitelisted,
-        out List<(EntityUid, LoadoutPreference)> heirlooms)
+        out List<(EntityUid, LoadoutPreference)> heirlooms
+    )
     {
         var jobPrototype = _prototype.Index(job);
         return ApplyCharacterLoadout(uid, jobPrototype, profile, playTimes, whitelisted, out heirlooms);
@@ -77,7 +78,8 @@ public sealed class SharedLoadoutSystem : EntitySystem
         HumanoidCharacterProfile profile,
         Dictionary<string, TimeSpan> playTimes,
         bool whitelisted,
-        out List<(EntityUid, LoadoutPreference)> heirlooms)
+        out List<(EntityUid, LoadoutPreference)> heirlooms
+    )
     {
         var failedLoadouts = new List<EntityUid>();
         var allLoadouts = new List<(EntityUid, LoadoutPreference, int)>();
@@ -102,7 +104,7 @@ public sealed class SharedLoadoutSystem : EntitySystem
             // Spawn the loadout items
             var spawned = EntityManager.SpawnEntities(
                 _sharedTransformSystem.GetMapCoordinates(uid),
-                loadoutProto.Items.Select(p => (string?) p.ToString()).ToList()); // Dumb cast
+                loadoutProto.Items.Select(p => (string?)p.ToString()).ToList()); // Dumb cast
 
             var i = 0; // If someone wants to add multi-item support to the editor
             foreach (var item in spawned)
@@ -198,6 +200,16 @@ public abstract partial class Loadout
 public sealed partial class LoadoutPreference : Loadout
 {
     [DataField] public bool Selected;
+
+    public LoadoutPreference(
+        string loadoutName,
+        bool selected,
+        string? customName = null,
+        string? customDescription = null,
+        string? customColorTint = null,
+        bool? customHeirloom = null
+    ) : base(loadoutName, customName, customDescription, customColorTint, customHeirloom) =>
+        Selected = selected;
 
     public LoadoutPreference(
         string loadoutName,
